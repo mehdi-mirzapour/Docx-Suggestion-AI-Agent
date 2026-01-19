@@ -94,14 +94,7 @@ This is the primary way to use the agent.
 
 We implemented a robust **Dynamic Host Injection** architecture to solve the "localhost in cloud" problem.
 
-```mermaid
-graph TD
-    User["User (ChatGPT)"] -->|1. 'Open Panel'| MCP["MCP Server (Python)"]
-    MCP -->|2. Detect Public URL| NgrokAPI["Ngrok Local API"]
-    MCP -->|3. Inject URL & Serve| Widget["Widget (HTML/JS)"]
-    Widget -->|4. Upload File (Direct)| NgrokTunnel["Ngrok Tunnel (https://...)"]
-    NgrokTunnel -->|5. Forward Request| Backend["Backend API (:8787)"]
-```
+
 
 1.  **Self-Contained Frontend**: The React widget is built into a single `index.html` file using `inline_assets.py`.
 2.  **Runtime Injection**: When you request the panel, the backend updates the widget code on-the-fly with the current secure Ngrok URL.
