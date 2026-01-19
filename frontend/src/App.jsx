@@ -16,6 +16,7 @@ function App() {
     const [editRequest, setEditRequest] = useState('')
     const [uploading, setUploading] = useState(false)
     const [analyzing, setAnalyzing] = useState(false)
+    const [progress, setProgress] = useState('')
 
     // Detect if running in standalone mode (no ChatGPT)
     useEffect(() => {
@@ -65,6 +66,7 @@ function App() {
         }
 
         setUploading(true)
+        setStatus('idle')
         const formData = new FormData()
         formData.append('file', file)
 
@@ -73,16 +75,22 @@ function App() {
             const uploadRes = await fetch(`${API_BASE}/upload`, {
                 method: 'POST',
                 body: formData,
+            }).catch(err => {
+                throw new Error(`Network error: Unable to connect to server. Please ensure the backend is running on port 8787. Details: ${err.message}`)
             })
-            const uploadData = await uploadRes.json()
+
+            const uploadData = await uploadRes.json().catch(() => {
+                throw new Error('Invalid response from server during upload')
+            })
 
             if (!uploadRes.ok) {
-                throw new Error(uploadData.error || 'Upload failed')
+                throw new Error(uploadData.error || `Upload failed with status ${uploadRes.status}`)
             }
 
             setDocId(uploadData.doc_id)
             setUploading(false)
             setAnalyzing(true)
+            setProgress('Analyzing document with AI... This may take 20-30 seconds for large documents.')
 
             // Analyze document
             const analyzeRes = await fetch(`${API_BASE}/analyze`, {
@@ -92,20 +100,34 @@ function App() {
                     doc_id: uploadData.doc_id,
                     request: editRequest,
                 }),
+            }).catch(err => {
+                throw new Error(`Network error during analysis: ${err.message}`)
             })
-            const analyzeData = await analyzeRes.json()
+
+            const analyzeData = await analyzeRes.json().catch(() => {
+                throw new Error('Invalid response from server during analysis')
+            })
 
             if (!analyzeRes.ok) {
-                throw new Error(analyzeData.error || 'Analysis failed')
+                throw new Error(analyzeData.error || `Analysis failed with status ${analyzeRes.status}`)
             }
 
             setSuggestions(analyzeData.suggestions)
             setAnalyzing(false)
+            setStatus('completed')
+            setProgress('')
         } catch (error) {
             console.error('Error:', error)
-            alert(`Error: ${error.message}`)
+            // Display user-friendly error message
+            const errorMessage = error.message.includes('CORS')
+                ? 'Connection blocked by browser security. Please ensure the backend server is running and CORS is configured correctly.'
+                : error.message
+            alert(`❌ ${errorMessage}`)
+            // Reset all loading states
             setUploading(false)
             setAnalyzing(false)
+            setStatus('error')
+            setProgress('')
         }
     }
 
@@ -198,8 +220,31 @@ function App() {
                                     disabled={!file || !editRequest || uploading || analyzing}
                                     className="btn-primary"
                                 >
-                                    {uploading ? 'Uploading...' : analyzing ? 'Analyzing...' : 'Upload & Analyze'}
+                                    {uploading ? 'Uploading...' : analyzing ? 'Analyzing... (20-30s)' : 'Upload & Analyze'}
                                 </button>
+                                {progress && (
+                                    <p style={{
+                                        marginTop: '12px',
+                                        fontSize: '0.9rem',
+                                        color: '#6366f1',
+                                        textAlign: 'center',
+                                        fontWeight: '500'
+                                    }}>
+                                        ⏳ {progress}
+                                    </p>
+                                )}
+                                {(!file || !editRequest) && (
+                                    <p style={{
+                                        marginTop: '12px',
+                                        fontSize: '0.85rem',
+                                        color: '#ef4444',
+                                        textAlign: 'center'
+                                    }}>
+                                        {!file && !editRequest && '⚠️ Please select a document and enter a request'}
+                                        {!file && editRequest && '⚠️ Please select a document'}
+                                        {file && !editRequest && '⚠️ Please enter an edit request'}
+                                    </p>
+                                )}
                             </div>
                         </>
                     ) : (

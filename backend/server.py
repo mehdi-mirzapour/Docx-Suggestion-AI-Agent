@@ -9,6 +9,11 @@ from docx import Document
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Resource, Tool, TextContent
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Initialize MCP server
 app = Server("docx-editor-server")
@@ -34,8 +39,115 @@ def extract_document_metadata(doc_path: str) -> dict:
     }
 
 
+
+
 def generate_suggestions(doc_path: str, request: str) -> list[dict]:
-    """Generate suggestions based on user request."""
+    """Generate AI-powered suggestions using GPT-4o-mini with batched processing."""
+    doc = Document(doc_path)
+    suggestions = []
+    
+    # Initialize OpenAI client
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or api_key == "your_openai_api_key_here":
+        # Fallback to rule-based if no API key
+        return generate_suggestions_fallback(doc_path, request)
+    
+    client = OpenAI(api_key=api_key)
+    
+    # Collect non-empty paragraphs with their indices
+    paragraphs_to_process = []
+    for idx, paragraph in enumerate(doc.paragraphs):
+        if not paragraph.text.strip():
+            continue
+        
+        text = paragraph.text
+        
+        # Skip very short paragraphs (less than 10 words)
+        if len(text.split()) < 10:
+            continue
+        
+        paragraphs_to_process.append((idx, text))
+    
+    # Batch paragraphs to reduce API calls (process 5 paragraphs at a time)
+    BATCH_SIZE = 5
+    
+    for batch_start in range(0, len(paragraphs_to_process), BATCH_SIZE):
+        batch = paragraphs_to_process[batch_start:batch_start + BATCH_SIZE]
+        
+        # Create a combined prompt with all paragraphs in the batch
+        batch_text = "\n\n---PARAGRAPH SEPARATOR---\n\n".join(
+            f"[PARAGRAPH {i}]\n{text}" 
+            for i, (idx, text) in enumerate(batch)
+        )
+        
+        try:
+            # Call GPT-4o-mini for batch suggestions
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"""You are a professional document editor. Analyze the given paragraphs and suggest improvements based on this request: "{request}"
+
+For each paragraph, return your response in this exact JSON format:
+{{
+    "suggestions": [
+        {{
+            "paragraph_number": 0,
+            "has_suggestion": true/false,
+            "suggested_text": "improved version of the text",
+            "reason": "brief explanation of the change"
+        }},
+        ...
+    ]
+}}
+
+Only suggest changes if they meaningfully improve the text. If no changes are needed for a paragraph, set has_suggestion to false for that paragraph.
+Process all paragraphs provided and return suggestions for each one."""
+                    },
+                    {
+                        "role": "user",
+                        "content": batch_text
+                    }
+                ],
+                temperature=0.3,
+                max_tokens=2000,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse AI response
+            import json
+            ai_response = json.loads(response.choices[0].message.content)
+            
+            # Extract suggestions for each paragraph in the batch
+            batch_suggestions = ai_response.get("suggestions", [])
+            
+            for suggestion_data in batch_suggestions:
+                paragraph_num = suggestion_data.get("paragraph_number", 0)
+                
+                # Map back to original paragraph index
+                if paragraph_num < len(batch):
+                    original_idx, original_text = batch[paragraph_num]
+                    
+                    if suggestion_data.get("has_suggestion", False):
+                        suggestions.append({
+                            "id": str(uuid.uuid4()),
+                            "paragraph_index": original_idx,
+                            "original": original_text,
+                            "suggested": suggestion_data["suggested_text"],
+                            "reason": suggestion_data["reason"],
+                        })
+        
+        except Exception as e:
+            # Log error but continue processing other batches
+            print(f"Error processing batch starting at {batch_start}: {e}")
+            continue
+    
+    return suggestions
+
+
+def generate_suggestions_fallback(doc_path: str, request: str) -> list[dict]:
+    """Fallback rule-based suggestions if OpenAI API is not available."""
     doc = Document(doc_path)
     suggestions = []
     
@@ -418,26 +530,39 @@ async def handle_apply(request: Request):
     doc_path = documents[doc_id]["path"]
     modified_path = apply_changes_to_document(doc_path, selected)
     
-    # Store modified document path
+    # Create a user-friendly filename based on original filename
+    original_filename = documents[doc_id]["filename"]
+    # Remove .docx extension if present, add _modified, then add .docx
+    base_name = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
+    download_filename = f"{base_name}_modified.docx"
+    
+    # Store modified document path and download filename
     documents[doc_id]["modified_path"] = modified_path
+    documents[doc_id]["download_filename"] = download_filename
     
     return JSONResponse({
         "success": True,
         "applied_count": len(selected),
-        "download_url": f"/api/download/{os.path.basename(modified_path)}"
+        "download_url": f"/api/download/{doc_id}"
     })
 
 async def handle_download(request: Request):
     """REST endpoint to download modified document."""
-    filename = request.path_params.get("filename")
-    file_path = UPLOAD_DIR / filename
+    doc_id = request.path_params.get("doc_id")
     
-    if not file_path.exists():
-        return JSONResponse({"error": "File not found"}, status_code=404)
+    if doc_id not in documents:
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+    
+    modified_path = documents[doc_id].get("modified_path")
+    if not modified_path or not Path(modified_path).exists():
+        return JSONResponse({"error": "Modified document not found"}, status_code=404)
+    
+    # Use the stored download filename with proper extension
+    download_filename = documents[doc_id].get("download_filename", "modified_document.docx")
     
     return FileResponse(
-        path=str(file_path),
-        filename=filename,
+        path=str(modified_path),
+        filename=download_filename,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
@@ -447,7 +572,7 @@ routes = [
     Route("/api/upload", handle_upload, methods=["POST"]),
     Route("/api/analyze", handle_analyze, methods=["POST"]),
     Route("/api/apply", handle_apply, methods=["POST"]),
-    Route("/api/download/{filename}", handle_download, methods=["GET"]),
+    Route("/api/download/{doc_id}", handle_download, methods=["GET"]),
     Mount("/sse/messages", app=handle_messages),
     Mount("/sse", app=handle_sse),
 ]
@@ -456,9 +581,11 @@ routes = [
 middleware = [
     Middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["*"],  # Allow all origins in development
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 ]
 
