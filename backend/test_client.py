@@ -21,12 +21,34 @@ async def test_live_connection():
                 for tool in tools.tools:
                     print(f"   - 🛠️  {tool.name}")
                 
-                print("📨 Sending 'resources/read' request...")
+                print("📨 Sending 'call_tool' (upload_document) request...")
+                
+                # Create a dummy docx in memory
+                import io, base64
+                from docx import Document as DocxDocument
+                
+                doc = DocxDocument()
+                doc.add_paragraph("Test document content.")
+                bio = io.BytesIO()
+                doc.save(bio)
+                bio.seek(0)
+                b64_content = base64.b64encode(bio.read()).decode('utf-8')
+                
                 try:
-                    res = await session.read_resource("ui://widget/document-editor.html")
-                    print(f"🎉 Read Resource Success! Content length: {len(res.contents[0].text)}")
+                    result = await session.call_tool("upload_document", arguments={
+                        "filename": "test_verification.docx",
+                        "content": b64_content
+                    })
+                    print(f"🎉 Tool Call Success!")
+                    for content in result.content:
+                        if content.type == "text":
+                            print(f"   Text: {content.text}")
+                            if hasattr(content, "annotations"):
+                                print(f"   Annotations: {content.annotations}")
+                            else:
+                                print(f"   WARNING: No annotations found on content object!")
                 except Exception as e:
-                    print(f"❌ Read Resource Failed: {e}")
+                    print(f"❌ Tool Call Failed: {e}")
 
                 return True
     except Exception as e:

@@ -396,7 +396,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         return [
             TextContent(
                 type="text",
-                text=f"Uploaded document: {filename}\nWord count: {metadata['word_count']}\nParagraphs: {metadata['paragraph_count']}",
+                text=f"Uploaded document: {filename}\nWord count: {metadata['word_count']}\nParagraphs: {metadata['paragraph_count']}\n\nDocument ID: {doc_id}",
                 annotations={
                     "structuredContent": {
                         "doc_id": doc_id,
