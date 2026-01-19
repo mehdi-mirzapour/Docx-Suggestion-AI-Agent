@@ -12,6 +12,8 @@ AI-powered document review agent for consulting deliverables. Works both as an *
 - ⬇️ Download modified documents
 - 🔄 Dual mode: ChatGPT integration + Standalone testing
 
+![Demo UI](demo_ui.png)
+
 ---
 
 ## Quick Start
