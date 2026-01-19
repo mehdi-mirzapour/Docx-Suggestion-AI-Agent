@@ -684,7 +684,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         documents[doc_id]["download_filename"] = download_filename
         
         # Use valid public URL for download
-        base_url = "https://beata-discriminantal-sirena.ngrok-free.dev"
+        base_url = get_public_url()
         
         return [
             TextContent(
