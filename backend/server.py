@@ -267,76 +267,160 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="upload_document",
-            description="Upload a Word document for editing",
+            description="""Upload a Word document (.docx) for editing and analysis.
+
+📋 WORKFLOW:
+This tool accepts a .docx file via publicly accessible URL or base64 content.
+After upload, it returns a doc_id that you'll use with analyze_document.
+
+📥 INPUT OPTIONS:
+
+Option 1 (RECOMMENDED): Use 'file_url'
+- Provide a publicly accessible URL to the .docx file
+- Best for files of any size
+- Example: https://file.io/abc123, https://tmpfiles.org/xyz789
+
+Option 2: Use 'content' (base64)
+- Only for small files (<50KB)
+- Must be complete, valid base64 encoding
+- Large files may be truncated by the client
+
+⚠️ IMPORTANT: You must provide EITHER 'file_url' OR 'content', not both.
+
+✅ RETURNS:
+- doc_id: Use this with analyze_document tool
+- Document metadata: word count, paragraph count, preview""",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "description": "Name of the file",
+                        "description": "Name of the file (must end in .docx)",
                     },
                     "content": {
                         "type": "string",
-                        "description": "Base64 encoded document content",
+                        "description": "Base64 encoded document content (optional if file_url is provided). Only use for small files <50KB.",
+                    },
+                    "file_url": {
+                        "type": "string",
+                        "description": "Publicly accessible URL to download the .docx file (RECOMMENDED). Use this for files of any size.",
                     },
                 },
-                "required": ["filename", "content"],
+                "required": ["filename"],
+                "additionalProperties": False,
+            },
+            annotations={
+                "destructiveHint": False,
+                "openWorldHint": False,
+                "readOnlyHint": True,
             },
             _meta={
-                "openai/outputTemplate": "ui://widget/document-editor.html",
-                "openai/toolInvocation/invoking": "Uploading document...",
-                "openai/toolInvocation/invoked": "Document uploaded",
-                "openai/widget/csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';",
-                "openai/widget/domain": "beata-discriminantal-sirena.ngrok-free.dev"
+                "openai/toolInvocation/invoking": "📤 Uploading document...",
+                "openai/toolInvocation/invoked": "✅ Document uploaded successfully",
+                "openai/widgetAccessible": False,
             }
         ),
         Tool(
-            name="analyze_and_suggest",
-            description="Analyze document and suggest edits based on user request",
+            name="analyze_document",
+            description="""Analyze an uploaded Word document and generate AI-powered suggestions.
+
+📋 PREREQUISITES:
+You must first call upload_document to get a doc_id.
+
+🔍 WHAT IT DOES:
+- Analyzes document paragraphs using GPT-4o-mini
+- Generates contextual suggestions based on your request
+- Returns suggestions with original text, improved text, and reasoning
+
+💡 EXAMPLE REQUESTS:
+- "Make it more formal and professional"
+- "Fix grammar and spelling errors"
+- "Make it more concise"
+- "Improve clarity and readability"
+
+✅ RETURNS:
+Interactive widget showing all suggestions with:
+- Original paragraph text
+- Suggested improvements
+- Explanation of changes
+- Accept/reject options""",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "doc_id": {
                         "type": "string",
-                        "description": "Document ID from upload",
+                        "description": "Document ID returned by upload_document tool",
                     },
                     "request": {
                         "type": "string",
-                        "description": "User's edit request (e.g., 'make it more formal')",
+                        "description": "Your editing request (e.g., 'Make it more formal', 'Fix grammar', 'Improve clarity')",
                     },
                 },
                 "required": ["doc_id", "request"],
+                "additionalProperties": False,
+            },
+            annotations={
+                "destructiveHint": False,
+                "openWorldHint": False,
+                "readOnlyHint": True,
             },
             _meta={
                 "openai/outputTemplate": "ui://widget/document-editor.html",
-                "openai/toolInvocation/invoking": "Analyzing document and generating suggestions...",
-                "openai/toolInvocation/invoked": "Analysis complete",
+                "openai/toolInvocation/invoking": "🔍 Analyzing document...",
+                "openai/toolInvocation/invoked": "✅ Analysis complete",
+                "openai/widgetAccessible": True,
                 "openai/widget/csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';",
                 "openai/widget/domain": "beata-discriminantal-sirena.ngrok-free.dev"
             }
         ),
         Tool(
             name="apply_changes",
-            description="Apply selected suggestions to the document",
+            description="""Apply selected suggestions to create a modified Word document.
+
+📋 PREREQUISITES:
+You must have:
+1. Called upload_document to get a doc_id
+2. Called analyze_document to generate suggestions
+
+✏️ WHAT IT DOES:
+- Applies the selected suggestions to the document
+- Creates a new modified .docx file
+- Provides a download link for the updated document
+
+📥 INPUT:
+- doc_id: The document identifier
+- suggestion_ids: Array of suggestion IDs to apply (from analyze_document)
+
+✅ RETURNS:
+- Download URL for the modified document
+- Count of applied changes
+- Interactive widget with download button""",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "doc_id": {
                         "type": "string",
-                        "description": "Document ID",
+                        "description": "Document ID returned by upload_document tool",
                     },
                     "suggestion_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of suggestion IDs to apply",
+                        "description": "List of suggestion IDs to apply (from analyze_document results)",
                     },
                 },
                 "required": ["doc_id", "suggestion_ids"],
+                "additionalProperties": False,
+            },
+            annotations={
+                "destructiveHint": False,
+                "openWorldHint": False,
+                "readOnlyHint": True,
             },
             _meta={
                 "openai/outputTemplate": "ui://widget/document-editor.html",
-                "openai/toolInvocation/invoking": "Applying changes to document...",
-                "openai/toolInvocation/invoked": "Changes applied successfully",
+                "openai/toolInvocation/invoking": "✏️ Applying changes...",
+                "openai/toolInvocation/invoked": "✅ Changes applied successfully",
+                "openai/widgetAccessible": True,
                 "openai/widget/csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';",
                 "openai/widget/domain": "beata-discriminantal-sirena.ngrok-free.dev"
             }
@@ -359,32 +443,106 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
     
     if name == "upload_document":
-        # Decode and save document
+        # Handle Upload Logic
         filename = arguments["filename"]
         
-        try:
-            content_str = arguments["content"]
-            # Fix padding if necessary
-            if len(content_str) % 4:
-                content_str += '=' * (4 - len(content_str) % 4)
-            content = base64.b64decode(content_str)
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error decoding file content: {str(e)}. Please ensure 'content' is valid Base64.")]
+        # Get file content from either base64 or URL
+        content = None
+        
+        if "file_url" in arguments and arguments["file_url"]:
+            # Download from URL
+            try:
+                import httpx
+                file_url = arguments["file_url"]
+                logger.info(f"Downloading file from URL: {file_url}")
+                
+                response = httpx.get(file_url, follow_redirects=True, timeout=30.0)
+                response.raise_for_status()
+                content = response.content
+                logger.info(f"Downloaded {len(content)} bytes from URL")
+            except Exception as e:
+                return [TextContent(type="text", text=f"Error downloading file from URL: {str(e)}")]
+        
+        elif "content" in arguments and arguments["content"]:
+            # Decode from base64
+            try:
+                content_str = arguments["content"]
+                
+                # Detect truncation - suspiciously small base64 content
+                if len(content_str) < 1000:
+                    logger.warning(f"Received small base64 content ({len(content_str)} chars), likely truncated")
+                    return [TextContent(
+                        type="text",
+                        text=f"⚠️ Warning: Received only {len(content_str)} characters of base64 data. "
+                             f"This appears to be truncated.\n\n"
+                             f"Please use 'file_url' parameter instead with a publicly accessible URL.\n\n"
+                             f"Steps:\n"
+                             f"1. Upload your file to a temporary hosting service (e.g., file.io, tmpfiles.org)\n"
+                             f"2. Get the public download URL\n"
+                             f"3. Call upload_document with file_url parameter"
+                    )]
+                
+                if len(content_str) % 4:
+                    content_str += '=' * (4 - len(content_str) % 4)
+                content = base64.b64decode(content_str)
+                logger.info(f"Decoded {len(content)} bytes from base64")
+            except Exception as e:
+                return [TextContent(type="text", text=f"Error decoding file content: {str(e)}")]
+        else:
+            # Neither content nor file_url provided
+            return [TextContent(
+                type="text",
+                text="""❌ Error: Missing file content
+
+You called upload_document with only 'filename', but you need to provide the actual file.
+
+🔧 SOLUTION:
+
+STEP 1: Upload the file to a temporary hosting service
+You can use one of these services:
+• file.io - Simple, no account needed
+• tmpfiles.org - Alternative option
+• Any other publicly accessible URL
+
+STEP 2: Get the public download URL
+
+STEP 3: Call upload_document again with both parameters:
+{
+  "filename": "Azure.docx",
+  "file_url": "https://file.io/YOUR_FILE_ID"
+}
+
+📝 Example using file.io:
+If you have access to curl or similar tools:
+  curl -F "file=@Azure.docx" https://file.io
+  
+This returns: {"success":true,"link":"https://file.io/abc123"}
+Then use "https://file.io/abc123" as the file_url parameter.
+
+⚠️ Note: The file must be publicly accessible for download."""
+            )]
 
         doc_id = str(uuid.uuid4())
         doc_path = UPLOAD_DIR / f"{doc_id}.docx"
         
         with open(doc_path, "wb") as f:
             f.write(content)
-        
+            
+        # Verify ZIP/DOCX validity
+        import zipfile
+        if not zipfile.is_zipfile(doc_path):
+             if doc_path.exists():
+                doc_path.unlink()
+             header_hex = content[:4].hex().upper()
+             return [TextContent(type="text", text=f"Error: The uploaded file is not a valid DOCX/ZIP package. Header: {header_hex}, Size: {len(content)} bytes.")]
+
         # Extract metadata
         try:
             metadata = extract_document_metadata(str(doc_path))
         except Exception as e:
-            # If docx fails to open, it's likely not a valid docx file
             if doc_path.exists():
                 doc_path.unlink()
-            return [TextContent(type="text", text=f"Error processing document: The uploaded file is not a valid Microsoft Word (.docx) document.\nDetails: {str(e)}")]
+            return [TextContent(type="text", text=f"Error processing document structure: {str(e)}")]
         
         # Store document info
         documents[doc_id] = {
@@ -396,39 +554,34 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         return [
             TextContent(
                 type="text",
-                text=f"Uploaded document: {filename}\nWord count: {metadata['word_count']}\nParagraphs: {metadata['paragraph_count']}\n\nDocument ID: {doc_id}",
-                annotations={
-                    "structuredContent": {
-                        "doc_id": doc_id,
-                        "filename": filename
-                    }
-                },
+                text=f"Uploaded '{filename}' successfully.\n\nDocument ID: {doc_id}\nWord count: {metadata['word_count']}\nParagraphs: {metadata['paragraph_count']}"
             )
         ]
     
-    elif name == "analyze_and_suggest":
+    elif name == "analyze_document":
+        # Handle Analysis Logic
         doc_id = arguments["doc_id"]
         request = arguments["request"]
         
         if doc_id not in documents:
-            return [TextContent(type="text", text="Document not found")]
+            return [TextContent(type="text", text="Document not found. Please upload the document first using upload_document.")]
         
         doc_path = documents[doc_id]["path"]
-        suggestions = generate_suggestions(doc_path, request)
+        filename = documents[doc_id]["filename"]
         
-        # Store suggestions
+        # Generate suggestions
+        suggestions = generate_suggestions(doc_path, request)
         suggestions_store[doc_id] = suggestions
         
-        # Return structured content for widget
         return [
             TextContent(
                 type="text",
-                text=f"Found {len(suggestions)} suggestions for: {request}",
-                # Add structured content for widget
+                text=f"Found {len(suggestions)} suggestions for: '{request}'",
                 annotations={
                     "structuredContent": {
-                        "suggestions": suggestions,
                         "doc_id": doc_id,
+                        "filename": filename,
+                        "suggestions": suggestions
                     }
                 },
             )
