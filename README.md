@@ -75,9 +75,30 @@ Connect ChatGPT to your MCP server:
 
 #### MCP Tools
 
-- `upload_document` - Upload Word document
-- `analyze_and_suggest` - Analyze and get suggestions
+- `upload_document` - Upload Word document (supports URL or base64)
+- `analyze_document` - Analyze and get suggestions
 - `apply_changes` - Apply selected changes
+
+#### File Upload Troubleshooting
+
+**Issue**: ChatGPT may truncate large files when using base64 encoding.
+
+**Solution**: Use the `file_url` parameter instead:
+
+1. **Upload your file to temporary hosting**:
+   - [file.io](https://file.io) - Simple, temporary file hosting
+   - [tmpfiles.org](https://tmpfiles.org) - Temporary file storage
+   - Or any publicly accessible URL
+
+2. **Get the download URL** from the hosting service
+
+3. **In ChatGPT**, explicitly instruct it to use the URL:
+   ```
+   "Please upload this document using the file_url parameter with this URL: 
+   https://file.io/your-file-url"
+   ```
+
+**Why this happens**: ChatGPT's MCP implementation has size limitations when sending base64-encoded content in tool arguments. Files larger than ~50KB may be truncated.
 
 ---
 

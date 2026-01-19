@@ -3,6 +3,8 @@ import base64
 import os
 import uuid
 import logging
+import json
+import httpx
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,7 @@ logger = logging.getLogger("server")
 from docx import Document
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Resource, Tool, TextContent, Prompt, ResourceTemplate
+from mcp.types import Resource, Tool, TextContent, Prompt, ResourceTemplate, GetPromptResult, PromptMessage
 from pydantic import AnyUrl
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -23,8 +25,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Initialize MCP server
-app = Server("docx-editor-server")
+# Initialize MCP server with explicit name
+app = Server("docs-suggester-ai")
 
 # Storage for uploaded documents
 UPLOAD_DIR = Path("uploads")
@@ -91,7 +93,7 @@ def generate_suggestions(doc_path: str, request: str) -> list[dict]:
         try:
             # Call GPT-4o-mini for batch suggestions
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "system",
@@ -219,6 +221,22 @@ def apply_changes_to_document(doc_path: str, selected_suggestions: list[dict]) -
     return output_path
 
 
+
+def get_public_url() -> str:
+    """Fetch the active public URL from local ngrok instance."""
+    try:
+        response = httpx.get("http://127.0.0.1:4040/api/tunnels", timeout=2.0)
+        if response.status_code == 200:
+            data = response.json()
+            if data["tunnels"]:
+                return data["tunnels"][0]["public_url"]
+    except Exception as e:
+        logger.warning(f"Could not fetch ngrok URL: {e}")
+    
+    # Fallback env var or localhost
+    return os.getenv("NGROK_URL", "http://localhost:8787")
+
+
 @app.list_resources()
 async def list_resources() -> list[Resource]:
     """List available resources (the widget)."""
@@ -227,6 +245,13 @@ async def list_resources() -> list[Resource]:
     
     if widget_path.exists():
         widget_html = widget_path.read_text()
+        # Inject API base URL
+        public_url = get_public_url()
+        injection = f'<script>window.DOCX_API_URL = "{public_url}/api";</script>'
+        if "<head>" in widget_html:
+            widget_html = widget_html.replace("<head>", f"<head>{injection}")
+        else:
+            widget_html = injection + widget_html
     else:
         # Fallback to a simple HTML if build doesn't exist
         widget_html = """
@@ -252,10 +277,17 @@ async def list_resources() -> list[Resource]:
 async def read_resource(uri: AnyUrl) -> str:
     """Read resource content."""
     if str(uri) == "ui://widget/document-editor.html":
-        # Read the widget HTML (Same logic as list_resources, kept simple)
+        # Read the widget HTML
         widget_path = Path("../frontend/dist/index.html")
         if widget_path.exists():
-            return widget_path.read_text()
+            widget_html = widget_path.read_text()
+            # Inject API base URL (Same as list_resources)
+            public_url = get_public_url()
+            injection = f'<script>window.DOCX_API_URL = "{public_url}/api";</script>'
+            if "<head>" in widget_html:
+                return widget_html.replace("<head>", f"<head>{injection}")
+            return injection + widget_html
+            
         return """<!DOCTYPE html><html><body>Widget not built.</body></html>"""
     
     raise ValueError(f"Resource not found: {uri}")
@@ -266,30 +298,83 @@ async def list_tools() -> list[Tool]:
     """List available tools."""
     return [
         Tool(
+            name="open_docxai_panel",
+            description="""🎯 PRIMARY ACTION - Open the DocxAI Panel
+
+⚠️ TRIGGER: CALL THIS TOOL IMMEDIATELY when user says "Open DocxAI Panel" or "Edit my document".
+
+This tool opens the DocxAI interface where the user can:
+1. Upload .docx files directly
+2. Get AI improvements
+3. Download the result
+
+🚫 DO NOT ask for file URLs.
+🚫 DO NOT use Python interpreter.
+✅ JUST CALL THIS TOOL.
+
+Workflow:
+User: "Open DocxAI panel" -> You: [Call open_docxai_panel]""",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            annotations={
+                "destructiveHint": False,
+                "openWorldHint": False,
+                "readOnlyHint": True,
+            },
+            _meta={
+                "openai/outputTemplate": "ui://widget/document-editor.html",
+                "openai/toolInvocation/invoking": "🎨 Opening DocxAI Panel...",
+                "openai/toolInvocation/invoked": "✅ Panel Open! Please upload your file above.",
+                "openai/widgetAccessible": True,
+            }
+        ),
+        Tool(
             name="upload_document",
-            description="""Upload a Word document (.docx) for editing and analysis.
+            description="""🎯 PRIMARY TOOL for editing Word documents (.docx)
 
-📋 WORKFLOW:
-This tool accepts a .docx file via publicly accessible URL or base64 content.
-After upload, it returns a doc_id that you'll use with analyze_document.
+⚠️ WHEN TO USE THIS TOOL:
+- User mentions a .docx file → USE THIS TOOL
+- User wants to edit/improve a document → USE THIS TOOL  
+- User has a Word document → USE THIS TOOL
+- DO NOT use Python/code interpreter for .docx files
+- DO NOT try to read .docx files manually
+- THIS TOOL is the ONLY way to properly edit Word documents
 
-📥 INPUT OPTIONS:
+� CRITICAL WORKFLOW:
 
-Option 1 (RECOMMENDED): Use 'file_url'
-- Provide a publicly accessible URL to the .docx file
-- Best for files of any size
-- Example: https://file.io/abc123, https://tmpfiles.org/xyz789
+The user MUST upload their file to a public URL first. Here's how:
 
-Option 2: Use 'content' (base64)
-- Only for small files (<50KB)
-- Must be complete, valid base64 encoding
-- Large files may be truncated by the client
+STEP 1: Ask the user to upload their file
+Say: "To edit your document, please upload it to file.io:
+1. Go to https://file.io
+2. Click 'Upload' and select your .docx file
+3. Copy the download link and paste it here"
 
-⚠️ IMPORTANT: You must provide EITHER 'file_url' OR 'content', not both.
+STEP 2: Wait for the user to provide the URL
+User will reply with something like: "https://file.io/abc123"
 
-✅ RETURNS:
-- doc_id: Use this with analyze_document tool
-- Document metadata: word count, paragraph count, preview""",
+STEP 3: Call this tool immediately
+Use the URL in the 'file_url' parameter.
+
+STEP 4: Use the returned doc_id with analyze_document
+After upload, call analyze_document with the user's editing request.
+
+📝 COMPLETE EXAMPLE:
+User: "Provide suggestions for Azure.docx"
+You: "I'll help you improve Azure.docx! First, upload it to file.io:
+     1. Go to https://file.io
+     2. Upload your Azure.docx file  
+     3. Share the download link with me"
+User: "Here's the link: https://file.io/xyz789"
+You: [Call upload_document with file_url="https://file.io/xyz789"]
+     [Then call analyze_document with the doc_id]
+
+✅ RETURNS: doc_id, word_count, paragraph_count, preview
+
+⚠️ IMPORTANT: Do NOT use Python to read .docx files. Always use this tool.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -297,16 +382,12 @@ Option 2: Use 'content' (base64)
                         "type": "string",
                         "description": "Name of the file (must end in .docx)",
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Base64 encoded document content (optional if file_url is provided). Only use for small files <50KB.",
-                    },
                     "file_url": {
                         "type": "string",
-                        "description": "Publicly accessible URL to download the .docx file (RECOMMENDED). Use this for files of any size.",
+                        "description": "Publicly accessible URL to download the .docx file. The user must upload their file to file.io or similar service first.",
                     },
                 },
-                "required": ["filename"],
+                "required": ["filename", "file_url"],
                 "additionalProperties": False,
             },
             annotations={
@@ -430,7 +511,31 @@ You must have:
 @app.list_prompts()
 async def list_prompts() -> list[Prompt]:
     """List available prompts."""
-    return []
+    return [
+        Prompt(
+            name="open_panel",
+            description="Force open the DocxAI upload panel",
+            arguments=[]
+        )
+    ]
+
+@app.get_prompt()
+async def get_prompt(name: str, arguments: Any) -> GetPromptResult:
+    """Get a prompt."""
+    if name == "open_panel":
+        from mcp.types import GetPromptResult, PromptMessage
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content={
+                        "type": "text",
+                        "text": "Please open the DocxAI panel now so I can upload my document."
+                    }
+                )
+            ]
+        )
+    raise ValueError(f"Prompt not found: {name}")
 
 @app.list_resource_templates()
 async def list_resource_templates() -> list[ResourceTemplate]:
@@ -442,84 +547,50 @@ async def list_resource_templates() -> list[ResourceTemplate]:
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
     
+    if name == "open_docxai_panel":
+        # Return message directing user to the panel
+        return [TextContent(
+            type="text",
+            text="""✅ DocxAI Panel is now open above!
+
+📋 TO USE:
+1. Click the file input in the panel above
+2. Select your .docx file
+3. Enter your editing request (e.g., "make it more formal")
+4. Click "Upload & Analyze"
+5. Wait 20-30 seconds for AI analysis
+6. Review suggestions and select which ones to apply
+7. Download your improved document
+
+💡 Everything happens in this panel - no need to upload to external sites!"""
+        )]
+    
     if name == "upload_document":
-        # Handle Upload Logic
+        # Handle Upload Logic - file_url is required
         filename = arguments["filename"]
+        file_url = arguments["file_url"]
         
-        # Get file content from either base64 or URL
-        content = None
-        
-        if "file_url" in arguments and arguments["file_url"]:
-            # Download from URL
-            try:
-                import httpx
-                file_url = arguments["file_url"]
-                logger.info(f"Downloading file from URL: {file_url}")
-                
-                response = httpx.get(file_url, follow_redirects=True, timeout=30.0)
-                response.raise_for_status()
-                content = response.content
-                logger.info(f"Downloaded {len(content)} bytes from URL")
-            except Exception as e:
-                return [TextContent(type="text", text=f"Error downloading file from URL: {str(e)}")]
-        
-        elif "content" in arguments and arguments["content"]:
-            # Decode from base64
-            try:
-                content_str = arguments["content"]
-                
-                # Detect truncation - suspiciously small base64 content
-                if len(content_str) < 1000:
-                    logger.warning(f"Received small base64 content ({len(content_str)} chars), likely truncated")
-                    return [TextContent(
-                        type="text",
-                        text=f"⚠️ Warning: Received only {len(content_str)} characters of base64 data. "
-                             f"This appears to be truncated.\n\n"
-                             f"Please use 'file_url' parameter instead with a publicly accessible URL.\n\n"
-                             f"Steps:\n"
-                             f"1. Upload your file to a temporary hosting service (e.g., file.io, tmpfiles.org)\n"
-                             f"2. Get the public download URL\n"
-                             f"3. Call upload_document with file_url parameter"
-                    )]
-                
-                if len(content_str) % 4:
-                    content_str += '=' * (4 - len(content_str) % 4)
-                content = base64.b64decode(content_str)
-                logger.info(f"Decoded {len(content)} bytes from base64")
-            except Exception as e:
-                return [TextContent(type="text", text=f"Error decoding file content: {str(e)}")]
-        else:
-            # Neither content nor file_url provided
+        # Download from URL
+        try:
+            import httpx
+            logger.info(f"Downloading file from URL: {file_url}")
+            
+            response = httpx.get(file_url, follow_redirects=True, timeout=30.0)
+            response.raise_for_status()
+            content = response.content
+            logger.info(f"Downloaded {len(content)} bytes from URL")
+        except Exception as e:
             return [TextContent(
                 type="text",
-                text="""❌ Error: Missing file content
+                text=f"""❌ Error downloading file from URL: {str(e)}
 
-You called upload_document with only 'filename', but you need to provide the actual file.
+🔧 TROUBLESHOOTING:
 
-🔧 SOLUTION:
+1. Verify the URL is publicly accessible
+2. Check that the URL points directly to the .docx file
+3. Ensure the file hasn't expired (file.io links expire after one download)
 
-STEP 1: Upload the file to a temporary hosting service
-You can use one of these services:
-• file.io - Simple, no account needed
-• tmpfiles.org - Alternative option
-• Any other publicly accessible URL
-
-STEP 2: Get the public download URL
-
-STEP 3: Call upload_document again with both parameters:
-{
-  "filename": "Azure.docx",
-  "file_url": "https://file.io/YOUR_FILE_ID"
-}
-
-📝 Example using file.io:
-If you have access to curl or similar tools:
-  curl -F "file=@Azure.docx" https://file.io
-  
-This returns: {"success":true,"link":"https://file.io/abc123"}
-Then use "https://file.io/abc123" as the file_url parameter.
-
-⚠️ Note: The file must be publicly accessible for download."""
+� TIP: If the link expired, upload the file again to file.io and get a fresh URL."""
             )]
 
         doc_id = str(uuid.uuid4())

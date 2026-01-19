@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import './App.css'
 
-const API_BASE = 'http://localhost:8787/api'
+const API_BASE = window.DOCX_API_URL || 'http://localhost:8787/api'
 
 function App() {
     const [suggestions, setSuggestions] = useState([])
@@ -67,39 +67,7 @@ function App() {
 
     // ... (handleApplyChanges code omitted for brevity) ...
 
-    if (suggestions.length === 0) {
-        return (
-            <div className="container">
-                <div className="empty-state">
-                    <h2>📄 Document Editor</h2>
 
-                    {isStandalone ? (
-                        <>
-                            {/* Standalone upload form... kept via context matching if I just replace component body? No, too large. */}
-                            {/* I will only replace the ChatGPT mode block below if I can match securely. */}
-                            {/* Actually, I am replacing the whole useEffect block. */}
-                        </>
-                    ) : (
-                        docId ? (
-                            <div className="waiting-state">
-                                <p className="success">✅ Document Uploaded!</p>
-                                <p>To proceed, please tell ChatGPT:</p>
-                                <p className="prompt-suggestion">"Analyze this document and suggest improvements"</p>
-                                <p className="hint">This will trigger the analysis tool and populate this view.</p>
-                            </div>
-                        ) : (
-                            <>
-                                <p>Upload a Word document and ask ChatGPT to suggest edits!</p>
-                                <p className="hint">
-                                    Try: "Make this document more formal" or "Fix grammar issues"
-                                </p>
-                            </>
-                        )
-                    )}
-                </div>
-            </div>
-        )
-    }
 
     // Standalone mode: Upload file
     const handleFileUpload = async () => {
@@ -191,47 +159,30 @@ function App() {
 
         setStatus('applying')
 
-        // Standalone mode: Use REST API
-        if (isStandalone) {
-            try {
-                const response = await fetch(`${API_BASE}/apply`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        doc_id: docId,
-                        suggestion_ids: Array.from(selectedSuggestions),
-                    }),
-                })
-                const data = await response.json()
+        try {
+            const response = await fetch(`${API_BASE}/apply`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    doc_id: docId,
+                    suggestion_ids: Array.from(selectedSuggestions),
+                }),
+            })
+            const data = await response.json()
 
-                if (!response.ok) {
-                    throw new Error(data.error || 'Apply failed')
-                }
-
-                setDownloadUrl(`http://localhost:8787${data.download_url}`)
-                setStatus('completed')
-            } catch (error) {
-                console.error('Error applying changes:', error)
-                setStatus('error')
+            if (!response.ok) {
+                throw new Error(data.error || 'Apply failed')
             }
-        } else {
-            // ChatGPT mode: Use MCP tool
-            if (window.openai?.callTool) {
-                try {
-                    const response = await window.openai.callTool('apply_changes', {
-                        doc_id: docId,
-                        suggestion_ids: Array.from(selectedSuggestions),
-                    })
 
-                    if (response?.structuredContent?.download_url) {
-                        setDownloadUrl(response.structuredContent.download_url)
-                        setStatus('completed')
-                    }
-                } catch (error) {
-                    console.error('Error applying changes:', error)
-                    setStatus('error')
-                }
-            }
+            // Construct download URL using the current origin (API_BASE minus /api)
+            // API_BASE is e.g. "https://ngrok-url/api"
+            const baseUrl = API_BASE.replace(/\/api$/, '')
+            setDownloadUrl(`${baseUrl}${data.download_url}`)
+            setStatus('completed')
+        } catch (error) {
+            console.error('Error applying changes:', error)
+            setStatus('error')
+            alert(`Failed to apply changes: ${error.message}`)
         }
     }
 
@@ -241,81 +192,52 @@ function App() {
                 <div className="empty-state">
                     <h2>📄 Document Editor</h2>
 
-                    {isStandalone ? (
-                        <>
-                            <p>Upload a Word document and request edits</p>
-                            <div className="upload-form">
-                                <input
-                                    type="file"
-                                    accept=".docx"
-                                    onChange={(e) => setFile(e.target.files[0])}
-                                    className="file-input"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="Enter edit request (e.g., 'make it more formal')"
-                                    value={editRequest}
-                                    onChange={(e) => setEditRequest(e.target.value)}
-                                    className="text-input"
-                                />
-                                <button
-                                    onClick={handleFileUpload}
-                                    disabled={!file || !editRequest || uploading || analyzing}
-                                    className="btn-primary"
-                                >
-                                    {uploading ? 'Uploading...' : analyzing ? 'Analyzing... (20-30s)' : 'Upload & Analyze'}
-                                </button>
-                                {progress && (
-                                    <p style={{
-                                        marginTop: '12px',
-                                        fontSize: '0.9rem',
-                                        color: '#6366f1',
-                                        textAlign: 'center',
-                                        fontWeight: '500'
-                                    }}>
-                                        ⏳ {progress}
-                                    </p>
-                                )}
-                                {(!file || !editRequest) && (
-                                    <p style={{
-                                        marginTop: '12px',
-                                        fontSize: '0.85rem',
-                                        color: '#ef4444',
-                                        textAlign: 'center'
-                                    }}>
-                                        {!file && !editRequest && '⚠️ Please select a document and enter a request'}
-                                        {!file && editRequest && '⚠️ Please select a document'}
-                                        {file && !editRequest && '⚠️ Please enter an edit request'}
-                                    </p>
-                                )}
-                            </div>
-                        </>
-                    ) : (
-                        docId ? (
-                            <div className="waiting-state" style={{ textAlign: 'center' }}>
-                                <p style={{ color: '#10b981', fontWeight: 'bold', fontSize: '1.1rem' }}>✅ Document Uploaded!</p>
-                                <p>To proceed, please tell ChatGPT:</p>
-                                <div style={{
-                                    background: '#f3f4f6',
-                                    padding: '12px',
-                                    borderRadius: '8px',
-                                    margin: '12px 0',
-                                    fontFamily: 'monospace',
-                                    fontWeight: '600'
-                                }}>
-                                    "Analyze this document and suggest improvements"
-                                </div>
-                                <p className="hint">This will trigger the analysis tool and populate this view.</p>
-                            </div>
-                        ) : (
-                            <>
-                                <p>Upload a Word document and ask ChatGPT to suggest edits!</p>
-                                <p className="hint">
-                                    Try: "Make this document more formal" or "Fix grammar issues"
-                                </p>
-                            </>
-                        )
-                    )}
+                    <p>Upload a Word document and request edits</p>
+                    <div className="upload-form">
+                        <input
+                            type="file"
+                            accept=".docx"
+                            onChange={(e) => setFile(e.target.files[0])}
+                            className="file-input"
+                        />
+                        <input
+                            type="text"
+                            placeholder="Enter edit request (e.g., 'make it more formal')"
+                            value={editRequest}
+                            onChange={(e) => setEditRequest(e.target.value)}
+                            className="text-input"
+                        />
+                        <button
+                            onClick={handleFileUpload}
+                            disabled={!file || !editRequest || uploading || analyzing}
+                            className="btn-primary"
+                        >
+                            {uploading ? 'Uploading...' : analyzing ? 'Analyzing... (20-30s)' : 'Upload & Analyze'}
+                        </button>
+                        {progress && (
+                            <p style={{
+                                marginTop: '12px',
+                                fontSize: '0.9rem',
+                                color: '#6366f1',
+                                textAlign: 'center',
+                                fontWeight: '500'
+                            }}>
+                                ⏳ {progress}
+                            </p>
+                        )}
+                        {(!file || !editRequest) && (
+                            <p style={{
+                                marginTop: '12px',
+                                fontSize: '0.85rem',
+                                color: '#ef4444',
+                                textAlign: 'center'
+                            }}>
+                                {!file && !editRequest && '⚠️ Please select a document and enter a request'}
+                                {!file && editRequest && '⚠️ Please select a document'}
+                                {file && !editRequest && '⚠️ Please enter an edit request'}
+                            </p>
+                        )}
+                    </div>
                 </div>
             </div>
         )

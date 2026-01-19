@@ -34,21 +34,26 @@ async def test_live_connection():
                 bio.seek(0)
                 b64_content = base64.b64encode(bio.read()).decode('utf-8')
                 
+                # Upload & Analyze in one step
                 try:
-                    result = await session.call_tool("upload_document", arguments={
+                    print(f"⏳ Calling 'analyze_document'...")
+                    result = await session.call_tool("analyze_document", arguments={
                         "filename": "test_verification.docx",
-                        "content": b64_content
+                        "content": b64_content,
+                        "request": "Make it more formal"
                     })
                     print(f"🎉 Tool Call Success!")
                     for content in result.content:
                         if content.type == "text":
-                            print(f"   Text: {content.text}")
-                            if hasattr(content, "annotations"):
+                            print(f"   Text Response Length: {len(content.text)}")
+                            if hasattr(content, "annotations") and content.annotations:
+                                print(f"   Annotations Type: {type(content.annotations)}")
                                 print(f"   Annotations: {content.annotations}")
-                            else:
-                                print(f"   WARNING: No annotations found on content object!")
                 except Exception as e:
                     print(f"❌ Tool Call Failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return False
 
                 return True
     except Exception as e:
