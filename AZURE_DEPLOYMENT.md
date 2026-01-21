@@ -1,38 +1,35 @@
-# 🚀 Azure Deployment Guide - DocxAI (Multi-Container)
+# 🚀 Azure Deployment Guide - DocxAI
 
-This document details how to deploy your **3-Docker Architecture** (MCP, Frontend, Nginx) to Azure.
+This document provides a comprehensive guide for deploying the DocxAI application to Azure using **3 Separate App Services** behind **Azure Front Door**.
 
-## 🏗️ Architecture: "Three Dockers on One Service"
+## 🏗️ Architecture Overview
 
-Instead of managing 3 separate servers, we run all 3 containers on **one** Azure App Service using Docker Compose.
+We deploy 3 distinct containers to 3 distinct App Services for maximum isolation and scalability.
 
 ```
-                  ┌───────────────────────────────┐
-                  │      Azure App Service        │
-                  │    (Multi-Container Mode)     │
-[User/ChatGPT] ──▶│ [Nginx Gateway] (Port 80)     │
-                  │       │          │            │
-                  │       ▼          ▼            │
-                  │  [Frontend]    [MCP API]      │
-                  └───────────────────────────────┘
+       [Azure Front Door] (https://docxai.azurefd.net)
+              │
+    ┌─────────┼──────────────┐
+    ▼         ▼              ▼
+[Frontend] [Backend API]   [MCP Server]
+(Port 80)    (Port 8787)   (Port 8787)
 ```
 
-### Is there a conflict with Azure Front Door?
-**No.**
-- **Azure Front Door**: Your "Global Doorman". It handles caching, WAF security, and closest-user routing. It passes traffic to your App Service.
-- **Nginx (Container)**: Your "Internal Receptionist". It sits *inside* your App Service and routes traffic to the correct container (Frontend vs MCP).
-- **They work perfectly together.** Front Door -> App Service (Nginx) -> Containers.
+### Routing Rules
+- `/*` ➝ **Frontend App Service** (React App)
+- `/api/*` ➝ **Backend App Service** (Python REST API)
+- `/mcp/*` (or SSE) ➝ **MCP App Service** (ChatGPT Connection)
 
 ---
 
-## 1. Prerequisites (Azure CLI)
+## 1. Prerequisites
 Login to Azure:
 ```bash
 az login
 az account set --subscription "<your-subscription-id>"
 ```
 
-## 2. Infrastructure Setup (Cheap & Simple)
+## 2. Infrastructure Setup
 
 ### A. Create Resource Group & Registry
 ```bash
@@ -47,71 +44,84 @@ az acr login --name docxaiunique123
 ```
 
 ### B. Build & Push Images
-We need to push your 3 custom images.
+You must build and push all 3 images separately.
 
 ```bash
-# Set your registry name
 export ACR_NAME=docxaiunique123
 
-# 1. Build & Push MCP
-docker build -f Dockerfile.mcp -t $ACR_NAME.azurecr.io/docxai-mcp:latest .
-docker push $ACR_NAME.azurecr.io/docxai-mcp:latest
-
-# 2. Build & Push Frontend
+# 1. Frontend Image
 docker build -f Dockerfile.frontend -t $ACR_NAME.azurecr.io/docxai-frontend:latest .
 docker push $ACR_NAME.azurecr.io/docxai-frontend:latest
 
-# 3. Build & Push Nginx Gateway
-docker build -f Dockerfile.nginx -t $ACR_NAME.azurecr.io/docxai-nginx:latest .
-docker push $ACR_NAME.azurecr.io/docxai-nginx:latest
+# 2. Backend Image
+docker build -f Dockerfile.backend -t $ACR_NAME.azurecr.io/docxai-backend:latest .
+docker push $ACR_NAME.azurecr.io/docxai-backend:latest
+
+# 3. MCP Image (Contains critical frontend assets for the panel)
+docker build -f Dockerfile.mcp -t $ACR_NAME.azurecr.io/docxai-mcp:latest .
+docker push $ACR_NAME.azurecr.io/docxai-mcp:latest
 ```
 
-## 3. Deploy to Azure App Service
+## 3. Deploy App Services
 
-### A. Create App Service Plan
+We need an App Service Plan and 3 Web Apps.
+
+### A. Create Plan
 ```bash
-# Create Plan (Linux / B1 Tier - approx $13/mo)
 az appservice plan create --name docxai-plan --resource-group docxai-rg --sku B1 --is-linux
 ```
 
-### B. Create the Web App
-We create **one** app that runs the provided `docker-compose-azure.yml`.
+### B. Create 3 Web Apps
 
-1. **Prepare `docker-compose-azure.yml`**: Ensure it uses your ACR image paths (replace `${DOCKER_REGISTRY}` with `docxaiunique123.azurecr.io`).
-
-2. **Create the App**:
+**1. Frontend App Service**
 ```bash
-az webapp create \
-  --resource-group docxai-rg \
-  --plan docxai-plan \
-  --name docxai-app-production \
-  --multicontainer-config-type compose \
-  --multicontainer-config-file docker-compose-azure.yml
+az webapp create --resource-group docxai-rg --plan docxai-plan --name docxai-frontend --deployment-container-image-name $ACR_NAME.azurecr.io/docxai-frontend:latest
 ```
 
-3. **Configure Settings**:
+**2. Backend App Service**
 ```bash
-# Set Registry Credentials & API Key
+az webapp create --resource-group docxai-rg --plan docxai-plan --name docxai-backend --deployment-container-image-name $ACR_NAME.azurecr.io/docxai-backend:latest
+```
+
+**3. MCP App Service**
+```bash
+az webapp create --resource-group docxai-rg --plan docxai-plan --name docxai-mcp --deployment-container-image-name $ACR_NAME.azurecr.io/docxai-mcp:latest
+```
+
+### C. Configure Settings & Ports
+
+**Link ACR Credentials:**
+```bash
 export ACR_PASS=$(az acr credential show --name $ACR_NAME --query passwords[0].value -o tsv)
-
-az webapp config appsettings set \
-  --resource-group docxai-rg \
-  --name docxai-app-production \
-  --settings \
-  DOCKER_REGISTRY_SERVER_URL="https://$ACR_NAME.azurecr.io" \
-  DOCKER_REGISTRY_SERVER_USERNAME=$ACR_NAME \
-  DOCKER_REGISTRY_SERVER_PASSWORD=$ACR_PASS \
-  DOCKER_REGISTRY=$ACR_NAME.azurecr.io \
-  OPENAI_API_KEY="your-openai-key-here" \
-  WEBSITES_PORT=80
+# Run this for ALL 3 apps:
+az webapp config container set --name docxai-frontend --resource-group docxai-rg --docker-registry-server-url https://$ACR_NAME.azurecr.io --docker-registry-server-user $ACR_NAME --docker-registry-server-password $ACR_PASS
+az webapp config container set --name docxai-backend --resource-group docxai-rg --docker-registry-server-url https://$ACR_NAME.azurecr.io --docker-registry-server-user $ACR_NAME --docker-registry-server-password $ACR_PASS
+az webapp config container set --name docxai-mcp --resource-group docxai-rg --docker-registry-server-url https://$ACR_NAME.azurecr.io --docker-registry-server-user $ACR_NAME --docker-registry-server-password $ACR_PASS
 ```
-*Note: `WEBSITES_PORT=80` tells Azure to listen to the Nginx container.*
 
-## 4. (Optional) Add Azure Front Door
+**Set Ports & API Key:**
+```bash
+# Frontend (Nginx listens on 80 by default, so usually no config needed, but safe to set)
+az webapp config appsettings set --name docxai-frontend --resource-group docxai-rg --settings WEBSITES_PORT=80
 
-If you want global caching or WAF:
+# Backend (Listens on 8787)
+az webapp config appsettings set --name docxai-backend --resource-group docxai-rg --settings WEBSITES_PORT=8787 OPENAI_API_KEY="your-key"
 
-1. Create a **Front Door** profile.
-2. Create an **Origin Group** pointing to `docxai-app-production.azurewebsites.net`.
-3. Front Door will forward traffic to your App Service.
-4. Your App Service (Nginx) will accept it and route it internally.
+# MCP (Listens on 8787)
+az webapp config appsettings set --name docxai-mcp --resource-group docxai-rg --settings WEBSITES_PORT=8787 OPENAI_API_KEY="your-key"
+```
+
+## 4. Set Up Azure Front Door
+
+1.  **Create Profile**: Create a "Standard" Front Door profile.
+2.  **Create Endpoint**: e.g., `docxai-main`.
+3.  **Add Origin Groups**:
+    *   `frontend-group` -> points to `docxai-frontend.azurewebsites.net`
+    *   `backend-group` -> points to `docxai-backend.azurewebsites.net`
+    *   `mcp-group` -> points to `docxai-mcp.azurewebsites.net`
+4.  **Add Routes**:
+    *   Path `/*` -> Origin `frontend-group`
+    *   Path `/api/*` -> Origin `backend-group`
+    *   Path `/sse` (or /mcp/*) -> Origin `mcp-group`
+
+This structure completely replaces the need for Nginx in the cloud, as Front Door handles the routing logic.
